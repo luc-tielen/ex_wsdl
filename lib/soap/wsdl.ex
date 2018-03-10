@@ -14,8 +14,8 @@ defmodule Soap.WSDL do
     messages: [%Message{}],
     ports: [%Port{}],
     bindings: [%Binding{}],
-    locations: [%Service{}],
+    services: [%Service{}],
   }
 
-  defstruct [:types, :messages, :ports, :bindings, :locations]
+  defstruct [:types, :messages, :ports, :bindings, :services]
 end

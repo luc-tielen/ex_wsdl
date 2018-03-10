@@ -7,11 +7,11 @@
   xmlns:xsd="http://www.w3.org/2001/XMLSchema">
 
   <message name="SayHelloRequest">
-    <part name="firstName" type="xsd:string"/>
+    <part name="firstName" element="xsd:string"/>
   </message>
 
   <message name="SayHelloResponse">
-    <part name="greeting" type="xsd:string"/>
+    <part name="greeting" element="xsd:string"/>
   </message>
 
   <portType name="Hello_PortType">

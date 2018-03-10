@@ -20,6 +20,7 @@ defmodule ElixirSoapClient.MixProject do
   defp deps do
     [
       {:xml_parsec, git: "https://github.com/luc-tielen/xml_parsec.git"},
+      {:focus, "~> 0.3.5"},
       {:mix_test_watch, "~> 0.5", only: :dev, runtime: false},
     ]
   end
