@@ -6,42 +6,36 @@ defmodule Soap.Parser do
   import Focus
 
 
-  # TODO rewrite using with statement
+  # TODO refactor
   @spec parse_wsdl(file_name :: String.t) :: {:ok, %WSDL{}} | {:error, any}
   def parse_wsdl(file_name) do
-    if File.exists?(file_name) do
-      file_name
-      |> File.read!()
-      |> Parser.parse()
-      |> handle_xml()
+    with {:file_exists, true} <- {:file_exists, File.exists?(file_name)},
+         {:ok, wsdl_contents} <- File.read(file_name),
+         {:ok, xml_data} <- Parser.parse(wsdl_contents),
+         trimmed_xml_data <- trim_whitespace(xml_data),
+         {:ok, wsdl_data} <- extract_wsdl_info(trimmed_xml_data)
+    do
+      {:ok, wsdl_data}
     else
-      {:error, "File not found: #{file_name}."}
-    end
-  end
-
-  defp handle_xml({:error, reason}), do: {:error, reason}
-  defp handle_xml(xml) do
-    result = xml |> trim_whitespace() |> extract_wsdl_info()
-    case result do
-      {:error, _} = err -> err
-      {:ok, wsdl} -> wsdl
+      {:file_exists, false} -> {:error, "File not found: #{file_name}."}
+      {:error, _} = error -> error
+      unexpected -> {:error, "Received unexpected value: #{unexpected}."}
     end
   end
 
   def extract_wsdl_info(xml_doc) do
-    msgs = extract_messages(xml_doc)
-    ports = extract_ports(xml_doc)
-    services = extract_services(xml_doc)
-    bindings = extract_bindings(xml_doc)
-    # TODO bindings, types
+    tags = Focus.view(body_lens() ~> values_lens(), xml_doc)
+    msgs = extract_messages(tags)
+    ports = extract_ports(tags)
+    services = extract_services(tags)
+    bindings = extract_bindings(tags)
+    # TODO types
     {:ok, %WSDL{messages: msgs, ports: ports, services: services,
                 bindings: bindings}}
   end
 
-  defp extract_messages(xml_doc) do
-    body_lens()
-    ~> values_lens()  # definitions
-    |> Focus.view(xml_doc)
+  defp extract_messages(tags) do
+    tags
     |> Stream.filter(fn tag -> tag.name == "message" end)
     |> Enum.map(&extract_message/1)
   end
@@ -49,40 +43,34 @@ defmodule Soap.Parser do
   defp extract_message(tag = %Tag{}) do
     name_lens = Lens.make_lens("name")
     element_lens = Lens.make_lens("element")
-    msg_name_lens = attributes_lens() ~> name_lens
     part_lens = values_lens() ~> Lens.idx(0) ~> attributes_lens()
-
-    [msg_name, part_name, type] = Focus.view_list([msg_name_lens,
+    [msg_name, part_name, type] = Focus.view_list([attr_name_lens(),
                                                    part_lens ~> name_lens,
                                                    part_lens ~> element_lens],
                                                    tag)
     %Message{name: msg_name, part_name: part_name, element: type}
   end
 
-  defp extract_ports(xml_doc) do
-    body_lens()
-    ~> values_lens()  # definitions
-    |> Focus.view(xml_doc)
+  defp extract_ports(tags) do
+    tags
     |> Stream.filter(fn tag -> tag.name == "portType" end)
     |> Enum.map(&extract_port/1)
   end
 
   defp extract_port(tag = %Tag{}) do
-    port_name = attributes_lens() ~> Lens.make_lens("name") |> Focus.view(tag)
+    port_name = Focus.view(attr_name_lens(), tag)
     operations = values_lens() |> Focus.view(tag) |> Enum.map(&extract_operation/1)
     %Port{name: port_name, operations: operations}
   end
 
   defp extract_operation(tag = %Tag{}) do
-    name_lens = Lens.make_lens("name")
-    op_name = attributes_lens() ~> name_lens |> Focus.view(tag)
+    op_name = Focus.view(attr_name_lens(), tag)
     msgs =
       values_lens()
       |> Focus.view(tag)
       |> Enum.map(fn msg ->
-        [attributes_lens() ~> Lens.make_lens("message"), Tag.name_lens()]
-        |> Focus.view_list(msg)
-        |> List.to_tuple()
+        Focus.alongside(attributes_lens() ~> Lens.make_lens("message"), name_lens())
+        |> Focus.view(msg)
       end)
 
     input_msg = Stream.filter(msgs, fn {_, type} -> type == "input" end) |> Enum.at(0)
@@ -90,17 +78,14 @@ defmodule Soap.Parser do
     %Operation{name: op_name, input_msg: input_msg, output_msg: output_msg}
   end
 
-  defp extract_services(xml_doc) do
-    body_lens()
-    ~> values_lens()  # definitions
-    |> Focus.view(xml_doc)
+  defp extract_services(tags) do
+    tags
     |> Stream.filter(fn tag -> tag.name == "service" end)
     |> Enum.map(&extract_service/1)
   end
 
   defp extract_service(tag) do
-    attr_name_lens = attributes_lens() ~> Lens.make_lens("name")
-    svc_name = attr_name_lens |> Focus.view(tag)
+    svc_name = attr_name_lens() |> Focus.view(tag)
     svc_docs = values_lens()
               |> Focus.view(tag)
               |> Enum.filter(fn tag -> tag.name == "documentation" end)
@@ -118,7 +103,7 @@ defmodule Soap.Parser do
       {:ok, binding} -> binding
     end
 
-    port_name = attr_name_lens |> Focus.view(binding_tag)
+    port_name = attr_name_lens() |> Focus.view(binding_tag)
     binding_name = attributes_lens() ~> Lens.make_lens("binding") |> Focus.view(binding_tag)
 
     location = values_lens()
@@ -131,14 +116,11 @@ defmodule Soap.Parser do
              binding_name: binding_name, location: location}
   end
 
-  defp extract_bindings(xml_doc) do
-    attr_name_lens = attributes_lens() ~> Lens.make_lens("name")
+  defp extract_bindings(tags) do
     attr_type_lens = attributes_lens() ~> Lens.make_lens("type")
     style_lens = attributes_lens() ~> Lens.make_lens("style")
 
-    bindings_tag = body_lens()
-      ~> values_lens()  # definitions
-      |> Focus.view(xml_doc)
+    bindings_tag = tags
       |> Enum.filter(fn tag -> tag.name == "binding" end)
       |> Enum.fetch(0)
     bindings = case bindings_tag do
@@ -150,7 +132,7 @@ defmodule Soap.Parser do
                  |> Focus.view(bindings)
                  |> Enum.filter(fn tag -> tag.name == "soap:binding" end)
                  |> Enum.fetch!(0)
-    [binding_name, type] = Focus.view_list([attr_name_lens, attr_type_lens], bindings)
+    [binding_name, type] = Focus.view_list([attr_name_lens(), attr_type_lens], bindings)
     style = Focus.view(style_lens, soap_binding_tag)
 
     operations = values_lens()
@@ -177,7 +159,7 @@ defmodule Soap.Parser do
                  |> Enum.filter(fn tag -> tag.name == "output" end)
                  |> Enum.fetch!(0)
 
-    name = Focus.view(attributes_lens() ~> Lens.make_lens("name"), tag)
+    name = Focus.view(attr_name_lens(), tag)
     action = Focus.view(action_lens, operation_tag)
     input_use = Focus.view(use_lens, input_tag)
     output_use = Focus.view(use_lens, output_tag)
@@ -190,16 +172,17 @@ defmodule Soap.Parser do
   end
   defp trim_whitespace(xml = %Tag{values: vals}) when is_nil(vals), do: xml
   defp trim_whitespace(xml = %Tag{values: vals}) when is_list(vals) do
-    updated_vals = vals
-                   |> Enum.reject(&contains_only_whitespace/1)
-                   |> Enum.map(&trim_whitespace/1)
+    updated_vals =
+      vals
+      |> Enum.reject(&contains_only_whitespace/1)
+      |> Enum.map(&trim_whitespace/1)
     %Tag{xml | values: updated_vals}
   end
-  defp trim_whitespace({:ok, x}), do: trim_whitespace(x)
   defp trim_whitespace(x), do: x
 
   defp contains_only_whitespace(str) when is_binary(str), do: String.trim(str) == ""
   defp contains_only_whitespace(_), do: false
 
+  defp attr_name_lens(), do: attributes_lens() ~> Lens.make_lens("name")
 end
 
