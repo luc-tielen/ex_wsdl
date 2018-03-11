@@ -35,9 +35,7 @@ defmodule Soap.Parser do
   end
 
   defp extract_messages(tags) do
-    tags
-    |> Stream.filter(fn tag -> tag.name == "message" end)
-    |> Enum.map(&extract_message/1)
+    extract_tags_with_name(tags, "message", &extract_message/1)
   end
 
   defp extract_message(tag = %Tag{}) do
@@ -52,26 +50,21 @@ defmodule Soap.Parser do
   end
 
   defp extract_ports(tags) do
-    tags
-    |> Stream.filter(fn tag -> tag.name == "portType" end)
-    |> Enum.map(&extract_port/1)
+    extract_tags_with_name(tags, "portType", &extract_port/1)
   end
 
   defp extract_port(tag = %Tag{}) do
     port_name = Focus.view(attr_name_lens(), tag)
-    operations = values_lens() |> Focus.view(tag) |> Enum.map(&extract_operation/1)
+    operations = map_tag_values(tag, &extract_operation/1)
     %Port{name: port_name, operations: operations}
   end
 
   defp extract_operation(tag = %Tag{}) do
     op_name = Focus.view(attr_name_lens(), tag)
-    msgs =
-      values_lens()
-      |> Focus.view(tag)
-      |> Enum.map(fn msg ->
-        Focus.alongside(attributes_lens() ~> Lens.make_lens("message"), name_lens())
-        |> Focus.view(msg)
-      end)
+    msgs = map_tag_values(tag, fn msg ->
+      Focus.alongside(attributes_lens() ~> Lens.make_lens("message"), name_lens())
+      |> Focus.view(msg)
+    end)
 
     input_msg = Stream.filter(msgs, fn {_, type} -> type == "input" end) |> Enum.at(0)
     output_msg = Stream.filter(msgs, fn {_, type} -> type == "output" end) |> Enum.at(0)
@@ -79,33 +72,19 @@ defmodule Soap.Parser do
   end
 
   defp extract_services(tags) do
-    tags
-    |> Stream.filter(fn tag -> tag.name == "service" end)
-    |> Enum.map(&extract_service/1)
+    extract_tags_with_name(tags, "service", &extract_service/1)
   end
 
   defp extract_service(tag) do
-    svc_name = attr_name_lens() |> Focus.view(tag)
-    svc_docs = values_lens()
-              |> Focus.view(tag)
-              |> Enum.filter(fn tag -> tag.name == "documentation" end)
-              |> Enum.fetch(0)
-    docs = case svc_docs do
-      :error -> ""
-      {:ok, docs_tag} -> values_lens() ~> Lens.idx(0) |> Focus.view(docs_tag)
-    end
-    svc_bindings = values_lens()
-              |> Focus.view(tag)
-              |> Enum.filter(fn tag -> tag.name == "port" end)
-              |> Enum.fetch(0)
-    binding_tag = case svc_bindings do
-      :error -> nil
-      {:ok, binding} -> binding
-    end
+    svc_name = Focus.view(attr_name_lens(), tag)
+    binding_tag = extract_value_with_name!(tag, "port", 0)
+    svc_docs = extract_value_with_name!(tag, "documentation", 0)
 
     port_name = attr_name_lens() |> Focus.view(binding_tag)
-    binding_name = attributes_lens() ~> Lens.make_lens("binding") |> Focus.view(binding_tag)
-
+    docs = values_lens() ~> Lens.idx(0) |> Focus.view(svc_docs)
+    binding_name = attributes_lens()
+      ~> Lens.make_lens("binding")
+      |> Focus.view(binding_tag)
     location = values_lens()
       ~> Lens.idx(0)
       ~> attributes_lens()
@@ -121,24 +100,20 @@ defmodule Soap.Parser do
     style_lens = attributes_lens() ~> Lens.make_lens("style")
 
     bindings_tag = tags
-      |> Enum.filter(fn tag -> tag.name == "binding" end)
+      |> Stream.filter(fn tag -> tag.name == "binding" end)
       |> Enum.fetch(0)
     bindings = case bindings_tag do
       {:ok, bindings} -> bindings
       :error -> []
     end
 
-    soap_binding_tag = values_lens()
-                 |> Focus.view(bindings)
-                 |> Enum.filter(fn tag -> tag.name == "soap:binding" end)
-                 |> Enum.fetch!(0)
+    soap_binding_tag = extract_value_with_name!(bindings, "soap:binding", 0)
     [binding_name, type] = Focus.view_list([attr_name_lens(), attr_type_lens], bindings)
     style = Focus.view(style_lens, soap_binding_tag)
 
     operations = values_lens()
                  |> Focus.view(bindings)
-                 |> Enum.filter(fn tag -> tag.name == "operation" end)
-                 |> Enum.map(&extract_binding_operation/1)
+                 |> extract_tags_with_name("operation", &extract_binding_operation/1)
     %Binding{name: binding_name, type: type, style: style, operations: operations}
   end
 
@@ -146,18 +121,9 @@ defmodule Soap.Parser do
     action_lens = attributes_lens() ~> Lens.make_lens("soapAction")
     use_lens = values_lens() ~> Lens.idx(0) ~> attributes_lens() ~> Lens.make_lens("use")
 
-    operation_tag = values_lens()
-                  |> Focus.view(tag)
-                  |> Enum.filter(fn tag -> tag.name == "soap:operation" end)
-                  |> Enum.fetch!(0)
-    input_tag = values_lens()
-                |> Focus.view(tag)
-                |> Enum.filter(fn tag -> tag.name == "input" end)
-                |> Enum.fetch!(0)
-    output_tag = values_lens()
-                 |> Focus.view(tag)
-                 |> Enum.filter(fn tag -> tag.name == "output" end)
-                 |> Enum.fetch!(0)
+    operation_tag = extract_value_with_name!(tag, "soap:operation", 0)
+    input_tag = extract_value_with_name!(tag, "input", 0)
+    output_tag = extract_value_with_name!(tag, "output", 0)
 
     name = Focus.view(attr_name_lens(), tag)
     action = Focus.view(action_lens, operation_tag)
@@ -184,5 +150,24 @@ defmodule Soap.Parser do
   defp contains_only_whitespace(_), do: false
 
   defp attr_name_lens(), do: attributes_lens() ~> Lens.make_lens("name")
+
+  defp extract_tags_with_name(tags, name, extract_fn) do
+    tags
+    |> Stream.filter(fn tag -> tag.name == name end)
+    |> Enum.map(extract_fn)
+  end
+
+  defp extract_value_with_name!(tag, name, idx) do
+    values_lens()
+    |> Focus.view(tag)
+    |> Stream.filter(fn t -> t.name == name end)
+    |> Enum.fetch!(idx)
+  end
+
+  defp map_tag_values(tag, map_fn) do
+    values_lens()
+    |> Focus.view(tag)
+    |> Enum.map(map_fn)
+  end
 end
 
