@@ -1,5 +1,6 @@
 defmodule Soap.Parser do
-  alias Soap.{WSDL, Message, Port, Operation, OperationMsg, Service}
+  alias Soap.{WSDL, Message, Port, Service}
+  alias Soap.{Operation, OperationMsg, Binding, BindingOperation}
   alias XML.{Parser, Doc, Tag}
   import XML.{Doc, Tag}
   import Focus
@@ -31,8 +32,10 @@ defmodule Soap.Parser do
     msgs = extract_messages(xml_doc)
     ports = extract_ports(xml_doc)
     services = extract_services(xml_doc)
+    bindings = extract_bindings(xml_doc)
     # TODO bindings, types
-    {:ok, %WSDL{messages: msgs, ports: ports, services: services}}
+    {:ok, %WSDL{messages: msgs, ports: ports, services: services,
+                bindings: bindings}}
   end
 
   defp extract_messages(xml_doc) do
@@ -126,6 +129,60 @@ defmodule Soap.Parser do
 
     %Service{name: svc_name, documentation: docs, port_name: port_name,
              binding_name: binding_name, location: location}
+  end
+
+  defp extract_bindings(xml_doc) do
+    attr_name_lens = attributes_lens() ~> Lens.make_lens("name")
+    attr_type_lens = attributes_lens() ~> Lens.make_lens("type")
+    style_lens = attributes_lens() ~> Lens.make_lens("style")
+
+    bindings_tag = body_lens()
+      ~> values_lens()  # definitions
+      |> Focus.view(xml_doc)
+      |> Enum.filter(fn tag -> tag.name == "binding" end)
+      |> Enum.fetch(0)
+    bindings = case bindings_tag do
+      {:ok, bindings} -> bindings
+      :error -> []
+    end
+
+    soap_binding_tag = values_lens()
+                 |> Focus.view(bindings)
+                 |> Enum.filter(fn tag -> tag.name == "soap:binding" end)
+                 |> Enum.fetch!(0)
+    [binding_name, type] = Focus.view_list([attr_name_lens, attr_type_lens], bindings)
+    style = Focus.view(style_lens, soap_binding_tag)
+
+    operations = values_lens()
+                 |> Focus.view(bindings)
+                 |> Enum.filter(fn tag -> tag.name == "operation" end)
+                 |> Enum.map(&extract_binding_operation/1)
+    %Binding{name: binding_name, type: type, style: style, operations: operations}
+  end
+
+  defp extract_binding_operation(tag = %Tag{}) do
+    action_lens = attributes_lens() ~> Lens.make_lens("soapAction")
+    use_lens = values_lens() ~> Lens.idx(0) ~> attributes_lens() ~> Lens.make_lens("use")
+
+    operation_tag = values_lens()
+                  |> Focus.view(tag)
+                  |> Enum.filter(fn tag -> tag.name == "soap:operation" end)
+                  |> Enum.fetch!(0)
+    input_tag = values_lens()
+                |> Focus.view(tag)
+                |> Enum.filter(fn tag -> tag.name == "input" end)
+                |> Enum.fetch!(0)
+    output_tag = values_lens()
+                 |> Focus.view(tag)
+                 |> Enum.filter(fn tag -> tag.name == "output" end)
+                 |> Enum.fetch!(0)
+
+    name = Focus.view(attributes_lens() ~> Lens.make_lens("name"), tag)
+    action = Focus.view(action_lens, operation_tag)
+    input_use = Focus.view(use_lens, input_tag)
+    output_use = Focus.view(use_lens, output_tag)
+    %BindingOperation{name: name, action: action,
+                      input_use: input_use, output_use: output_use}
   end
 
   defp trim_whitespace(doc = %Doc{body: body = %Tag{}}) do
