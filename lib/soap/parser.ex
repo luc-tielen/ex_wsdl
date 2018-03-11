@@ -6,7 +6,6 @@ defmodule Soap.Parser do
   import Focus
 
 
-  # TODO refactor
   @spec parse_wsdl(file_name :: String.t) :: {:ok, %WSDL{}} | {:error, any}
   def parse_wsdl(file_name) do
     with {:file_exists, true} <- {:file_exists, File.exists?(file_name)},
@@ -66,9 +65,17 @@ defmodule Soap.Parser do
       |> Focus.view(msg)
     end)
 
-    input_msg = Stream.filter(msgs, fn {_, type} -> type == "input" end) |> Enum.at(0)
-    output_msg = Stream.filter(msgs, fn {_, type} -> type == "output" end) |> Enum.at(0)
+    input_msg = find_op_with_type!(msgs, "input")
+    output_msg = find_op_with_type!(msgs, "output")
     %Operation{name: op_name, input_msg: input_msg, output_msg: output_msg}
+  end
+
+  defp find_op_with_type!(tags, type) do
+    {op, _} =
+      tags
+      |> Stream.filter(fn {_, t} -> t == type end)
+      |> Enum.fetch!(0)
+    op
   end
 
   defp extract_services(tags) do
@@ -82,10 +89,12 @@ defmodule Soap.Parser do
 
     port_name = attr_name_lens() |> Focus.view(binding_tag)
     docs = values_lens() ~> Lens.idx(0) |> Focus.view(svc_docs)
-    binding_name = attributes_lens()
+    binding_name =
+      attributes_lens()
       ~> Lens.make_lens("binding")
       |> Focus.view(binding_tag)
-    location = values_lens()
+    location =
+      values_lens()
       ~> Lens.idx(0)
       ~> attributes_lens()
       ~> Lens.make_lens("location")
@@ -99,21 +108,19 @@ defmodule Soap.Parser do
     attr_type_lens = attributes_lens() ~> Lens.make_lens("type")
     style_lens = attributes_lens() ~> Lens.make_lens("style")
 
-    bindings_tag = tags
+    bindings =
+      tags
       |> Stream.filter(fn tag -> tag.name == "binding" end)
-      |> Enum.fetch(0)
-    bindings = case bindings_tag do
-      {:ok, bindings} -> bindings
-      :error -> []
-    end
-
+      |> Enum.fetch!(0)
     soap_binding_tag = extract_value_with_name!(bindings, "soap:binding", 0)
-    [binding_name, type] = Focus.view_list([attr_name_lens(), attr_type_lens], bindings)
+    [binding_name, type] = Focus.view_list([attr_name_lens(), attr_type_lens],
+                                           bindings)
     style = Focus.view(style_lens, soap_binding_tag)
 
-    operations = values_lens()
-                 |> Focus.view(bindings)
-                 |> extract_tags_with_name("operation", &extract_binding_operation/1)
+    operations =
+      values_lens()
+      |> Focus.view(bindings)
+      |> extract_tags_with_name("operation", &extract_binding_operation/1)
     %Binding{name: binding_name, type: type, style: style, operations: operations}
   end
 
