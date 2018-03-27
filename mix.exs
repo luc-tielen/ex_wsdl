@@ -3,7 +3,7 @@ defmodule ElixirSoapClient.MixProject do
 
   def project do
     [
-      app: :elixir_soap_client,
+      app: :ex_wsdl,
       version: "0.1.0",
       elixir: "~> 1.6",
       start_permanent: Mix.env() == :prod,

@@ -10,11 +10,11 @@ use Mix.Config
 
 # You can configure your application as:
 #
-#     config :elixir_soap_client, key: :value
+#     config :ex_wsdl, key: :value
 #
 # and access this configuration in your application as:
 #
-#     Application.get_env(:elixir_soap_client, :key)
+#     Application.get_env(:ex_wsdl, :key)
 #
 # You can also configure a 3rd-party app:
 #
